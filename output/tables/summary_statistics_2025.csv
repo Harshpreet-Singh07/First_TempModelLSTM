@@ -1,0 +1,57 @@
+Variable Type,Statistical Average Type,Value,Unit,n
+"Temperature, 2025",Standard Deviation,12.8122,deg C,8760
+"Temperature, 2025",Minimum,-24.4828,deg C,8760
+"Temperature, 2025",Maximum,30.8455,deg C,8760
+"Temperature, 2025",Skewness,-0.0075,,8760
+"Temperature, 2025",First Quartile,-7.4314,deg C,8760
+"Temperature, 2025",Second Quartile/Median,4.7147,deg C,8760
+"Temperature, 2025",Third Quartile,15.7366,deg C,8760
+"Temperature, 2025",Mean,4.3870,deg C,8760
+"Wind Speed U-Component, 2025",Standard Deviation,1.0269,m/s,8760
+"Wind Speed U-Component, 2025",Minimum,-2.1128,m/s,8760
+"Wind Speed U-Component, 2025",Maximum,4.4285,m/s,8760
+"Wind Speed U-Component, 2025",Skewness,0.3427,,8760
+"Wind Speed U-Component, 2025",First Quartile,-0.2287,m/s,8760
+"Wind Speed U-Component, 2025",Second Quartile/Median,0.4028,m/s,8760
+"Wind Speed U-Component, 2025",Third Quartile,1.1601,m/s,8760
+"Wind Speed U-Component, 2025",Mean,0.4905,m/s,8760
+"Wind Speed V-Component, 2025",Standard Deviation,1.0307,m/s,8760
+"Wind Speed V-Component, 2025",Minimum,-3.4106,m/s,8760
+"Wind Speed V-Component, 2025",Maximum,3.5144,m/s,8760
+"Wind Speed V-Component, 2025",Skewness,0.0060,,8760
+"Wind Speed V-Component, 2025",First Quartile,-0.4653,m/s,8760
+"Wind Speed V-Component, 2025",Second Quartile/Median,0.2445,m/s,8760
+"Wind Speed V-Component, 2025",Third Quartile,0.9964,m/s,8760
+"Wind Speed V-Component, 2025",Mean,0.2597,m/s,8760
+"Total Precipitation, 2025",Standard Deviation,0.0560,mm/hour,8760
+"Total Precipitation, 2025",Minimum,0.0000,mm/hour,8760
+"Total Precipitation, 2025",Maximum,0.3824,mm/hour,8760
+"Total Precipitation, 2025",Skewness,1.6828,,8760
+"Total Precipitation, 2025",First Quartile,0.0143,mm/hour,8760
+"Total Precipitation, 2025",Second Quartile/Median,0.0403,mm/hour,8760
+"Total Precipitation, 2025",Third Quartile,0.0790,mm/hour,8760
+"Total Precipitation, 2025",Mean,0.0562,mm/hour,8760
+"Total Precipitation, 2025 (daily totals)",Standard Deviation,1.1097,mm/day,365
+"Total Precipitation, 2025 (daily totals)",Minimum,0.0038,mm/day,365
+"Total Precipitation, 2025 (daily totals)",Maximum,7.0109,mm/day,365
+"Total Precipitation, 2025 (daily totals)",Skewness,1.1755,,365
+"Total Precipitation, 2025 (daily totals)",First Quartile,0.4387,mm/day,365
+"Total Precipitation, 2025 (daily totals)",Second Quartile/Median,1.1462,mm/day,365
+"Total Precipitation, 2025 (daily totals)",Third Quartile,1.9881,mm/day,365
+"Total Precipitation, 2025 (daily totals)",Mean,1.3483,mm/day,365
+"Dewpoint Temperature, 2025",Standard Deviation,9.8383,deg C,8760
+"Dewpoint Temperature, 2025",Minimum,-29.4670,deg C,8760
+"Dewpoint Temperature, 2025",Maximum,12.6212,deg C,8760
+"Dewpoint Temperature, 2025",Skewness,-0.1103,,8760
+"Dewpoint Temperature, 2025",First Quartile,-12.4511,deg C,8760
+"Dewpoint Temperature, 2025",Second Quartile/Median,-3.6712,deg C,8760
+"Dewpoint Temperature, 2025",Third Quartile,5.5966,deg C,8760
+"Dewpoint Temperature, 2025",Mean,-3.5107,deg C,8760
+"Kp Index, 2025",Standard Deviation,1.3556,dimensionless,8760
+"Kp Index, 2025",Minimum,0.0000,dimensionless,8760
+"Kp Index, 2025",Maximum,8.7000,dimensionless,8760
+"Kp Index, 2025",Skewness,0.5575,,8760
+"Kp Index, 2025",First Quartile,1.7000,dimensionless,8760
+"Kp Index, 2025",Second Quartile/Median,2.3000,dimensionless,8760
+"Kp Index, 2025",Third Quartile,3.3000,dimensionless,8760
+"Kp Index, 2025",Mean,2.5321,dimensionless,8760

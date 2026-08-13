@@ -1,0 +1,13 @@
+# Source GRIBs - 440 MB for 2025 alone, far past GitHub's 100 MB file limit.
+# The app never reads them; it reads the cached CSVs in data/processed/.
+data/raw/
+*.grib
+*.grib.*.idx
+
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+.streamlit/secrets.toml
+.DS_Store

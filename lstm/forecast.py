@@ -1,0 +1,203 @@
+"""
+Inference helpers for the trained t2m LSTM - shared by app.py and usable alone.
+
+Two ways to forecast a day:
+
+  warm start   the 72 hours immediately before that day are observed, so the
+               model is seeded with reality and rolled forward 24 hours. This
+               is a real 24 h forecast issued at 00:00 and is the only mode
+               worth scoring.
+
+  free running the seed is not available (no observations near that day), so
+               the model is seeded with the last observed 72 hours and fed its
+               own output for as many hours as it takes to reach the target.
+               Errors compound every step; past a few days this says nothing
+               about the weather, only about what the model decays towards.
+               Capped at FREE_RUN_CAP_DAYS.
+
+The model predicts the *change* per hour (see train_lstm.py --no-delta), so a
+rollout step is: predict delta -> add to the last value -> shift the window.
+
+Standalone use:
+    python lstm/forecast.py 2026-03-14
+"""
+
+import json
+import os
+import sys
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
+
+ROOT = Path(__file__).resolve().parents[1]
+HERE = Path(__file__).resolve().parent
+MODEL_PATH = HERE / "models" / "lstm_t2m.keras"
+SCALER_PATH = HERE / "models" / "scaler_t2m.json"
+CSV_2025 = ROOT / "data" / "processed" / "domain_mean_hourly_2025.csv"
+CSV_2026 = ROOT / "data" / "processed" / "domain_mean_hourly_2026.csv"
+
+HOURS_PER_DAY = 24
+FREE_RUN_CAP_DAYS = 60
+
+
+# ---------------------------------------------------------------------- data
+def _read(path):
+    df = pd.read_csv(path, index_col="valid_time", parse_dates=True)
+    return df["t2m"].astype("float64").sort_index()
+
+
+def load_history():
+    """Observed hourly t2m (deg C), 2025 plus 2026 if it has been built.
+
+    Returned on a gap-free hourly index: missing hours are interpolated, since
+    a rollout window cannot have holes in it.
+    """
+    if not CSV_2025.exists():
+        raise FileNotFoundError(
+            f"{CSV_2025} not found - build it with: python scripts/era5_series.py")
+
+    parts = [_read(CSV_2025)]
+    has_2026 = CSV_2026.exists()
+    if has_2026:
+        parts.append(_read(CSV_2026))
+
+    s = pd.concat(parts)
+    s = s[~s.index.duplicated(keep="last")]
+    s = s.reindex(pd.date_range(s.index[0], s.index[-1], freq="h")).interpolate(
+        limit_direction="both")
+    s.index.name = "valid_time"
+
+    obs_2026 = s[s.index.year == 2026]
+    return s, {
+        "has_2026": has_2026 and len(obs_2026) > 0,
+        "last_2026": obs_2026.index[-1] if len(obs_2026) else None,
+        "n_2026": len(obs_2026),
+    }
+
+
+# --------------------------------------------------------------------- model
+class Forecaster:
+    """The saved Keras model plus the scaling it was trained with."""
+
+    def __init__(self, model_path=MODEL_PATH, scaler_path=SCALER_PATH):
+        if not model_path.exists() or not scaler_path.exists():
+            raise FileNotFoundError(
+                f"no trained model in {model_path.parent} - "
+                f"run: python lstm/train_lstm.py")
+
+        import keras                                  # slow import, do it late
+        self.model = keras.models.load_model(model_path)
+        self.scaler = json.loads(scaler_path.read_text())
+        self.mu = self.scaler["mean_c"]
+        self.sd = self.scaler["std_c"]
+        self.lookback = self.scaler["lookback"]
+        self.horizon = self.scaler["horizon"]
+        self.delta = self.scaler.get("delta", False)
+
+    def rollout(self, seed_c, steps):
+        """Feed the model its own output `steps` times. Returns deg C."""
+        if len(seed_c) != self.lookback:
+            raise ValueError(f"seed must be {self.lookback} hours, got {len(seed_c)}")
+        if self.horizon != 1:
+            raise ValueError(
+                f"this model was trained with horizon={self.horizon}; an hourly "
+                f"rollout needs horizon=1 (retrain with: python lstm/train_lstm.py)")
+
+        z = ((np.asarray(seed_c, dtype="float64") - self.mu) / self.sd).astype("float32")
+        out = np.empty(steps, dtype="float64")
+        for i in range(steps):
+            step = float(self.model(z[None, :, None], training=False)[0, 0])
+            nxt = step + z[-1] if self.delta else step
+            out[i] = nxt
+            z = np.append(z[1:], np.float32(nxt))
+        return out * self.sd + self.mu
+
+
+# ------------------------------------------------------------------ forecast
+def forecast_day(fc, history, day):
+    """Predict the 24 hours of `day`, warm-started if the data allows it.
+
+    Returns a dict with an hourly DataFrame (predicted / actual / persistence),
+    the mode used, and how far the forecast had to free-run.
+    """
+    day = pd.Timestamp(day).normalize()
+    target = pd.date_range(day, periods=HOURS_PER_DAY, freq="h")
+    seed_end = day - pd.Timedelta(hours=1)              # last hour before the day
+    seed_start = seed_end - pd.Timedelta(hours=fc.lookback - 1)
+
+    if seed_start >= history.index[0] and seed_end <= history.index[-1]:
+        # every seed hour is observed: a genuine 24 h forecast issued at 00:00
+        seed = history.loc[seed_start:seed_end].values
+        pred = fc.rollout(seed, HOURS_PER_DAY)
+        mode, free_hours, issued = "warm", 0, seed_end
+
+    elif day > history.index[-1]:
+        # beyond the observations: seed with the last real window, then run on
+        seed_end = history.index[-1]
+        seed = history.iloc[-fc.lookback:].values
+        free_hours = int((day - seed_end) / pd.Timedelta(hours=1)) - 1
+        if free_hours > FREE_RUN_CAP_DAYS * HOURS_PER_DAY:
+            return {
+                "error": (
+                    f"{day.date()} is {free_hours / 24:.0f} days past the last "
+                    f"observation ({seed_end.date()}). Free-running the model that "
+                    f"far produces a decayed curve, not a forecast, so it is capped "
+                    f"at {FREE_RUN_CAP_DAYS} days. Build the 2026 observations "
+                    f"(python scripts/era5_2026.py) to forecast this day properly."),
+            }
+        pred = fc.rollout(seed, free_hours + HOURS_PER_DAY)[-HOURS_PER_DAY:]
+        mode, issued = "free", seed_end
+
+    else:
+        return {"error": f"{day.date()} is before the available history starts."}
+
+    actual = history.reindex(target)
+    persistence = np.full(HOURS_PER_DAY, history.loc[issued])
+
+    df = pd.DataFrame(
+        {"predicted": pred, "persistence": persistence, "actual": actual.values},
+        index=target)
+    df.index.name = "valid_time"
+
+    return {
+        "frame": df,
+        "mode": mode,
+        "issued": issued,
+        "free_hours": free_hours,
+        "has_actual": bool(actual.notna().all()),
+        "scores": _scores(df) if actual.notna().all() else None,
+    }
+
+
+def _scores(df):
+    out = {}
+    for col in ("predicted", "persistence"):
+        err = df[col].values - df["actual"].values
+        out[col] = {
+            "mae": float(np.mean(np.abs(err))),
+            "rmse": float(np.sqrt(np.mean(err ** 2))),
+            "bias": float(np.mean(err)),
+        }
+    return out
+
+
+if __name__ == "__main__":
+    day = sys.argv[1] if len(sys.argv) > 1 else "2026-01-01"
+    hist, meta = load_history()
+    print(f"history: {hist.index[0]} .. {hist.index[-1]}  "
+          f"({meta['n_2026']} hours of 2026)")
+
+    res = forecast_day(Forecaster(), hist, day)
+    if "error" in res:
+        raise SystemExit(res["error"])
+
+    print(f"\n{day}  mode={res['mode']}  issued={res['issued']}"
+          + (f"  free-run {res['free_hours']} h" if res["free_hours"] else ""))
+    print(res["frame"].round(2).to_string())
+    if res["scores"]:
+        for name, d in res["scores"].items():
+            print(f"{name:12s} MAE {d['mae']:.3f}  RMSE {d['rmse']:.3f}  "
+                  f"bias {d['bias']:+.3f} deg C")

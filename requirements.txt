@@ -1,0 +1,14 @@
+# Deployed app (lstm/app.py) - these are all it needs at runtime.
+# tensorflow-cpu, not tensorflow: the GPU build is ~3x larger and no hosted
+# free tier gives you a GPU anyway. Streamlit Community Cloud caps the whole
+# environment around 2.7 GB, which the full tensorflow wheel can blow past.
+streamlit>=1.40
+tensorflow-cpu>=2.16
+pandas>=2.2
+numpy>=1.26
+matplotlib>=3.8
+
+# Data preparation only (scripts/era5_series.py, scripts/era5_2026.py).
+# Not needed to run the app - it reads the cached CSVs - and cfgrib pulls in
+# eccodes, which is awkward on hosted runners. Install locally if rebuilding:
+#   pip install xarray cfgrib eccodes
