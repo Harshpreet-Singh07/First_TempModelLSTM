@@ -134,6 +134,44 @@ says which one it used:
 With no 2026 file present, *every* day is free-running from 31 Dec 2025 - so
 1 January is informative and 1 June is not.
 
+## Deploying to Streamlit Community Cloud
+
+The repo is already prepared: `requirements.txt` at the root, the 440 MB GRIB
+gitignored, and the two files the app actually loads (the 2025 CSV and
+`lstm/models/`) committed - so a clone runs without any raw data.
+
+1. Create an empty repo at <https://github.com/new>. **Public** - the free tier
+   cannot deploy from a private repo. Everything committed becomes visible:
+   the ERA5 series, the figures, the trained model. ERA5 is Copernicus-licensed
+   and free to redistribute with attribution, so this is fine, but it is a
+   deliberate choice rather than an accident.
+
+2. Push:
+
+   ```bash
+   git remote add origin https://github.com/<you>/<repo>.git
+   git push -u origin main
+   ```
+
+3. At <https://share.streamlit.io> → **New app** → pick the repo, branch `main`,
+   and set **Main file path** to `lstm/app.py`. Under *Advanced*, choose
+   **Python 3.12** (TensorFlow does not publish wheels for every version).
+   Deploy.
+
+The first build takes several minutes - `tensorflow-cpu` is a large wheel.
+
+Two things to expect:
+
+- **The 2026 data is not there until you push it.** `data/processed/` is
+  committed, so once `era5_2026.py` has written the 2026 CSV, `git add` and push
+  it or the hosted app will free-run exactly like a fresh clone.
+- **TensorFlow is heavy for a free tier.** If the app is killed while booting,
+  that is memory, not a bug in the code. The model is 16,961 parameters - a
+  single LSTM cell - so the fix is to drop the TensorFlow dependency at runtime
+  and do the forward pass in numpy from exported weights, which turns ~600 MB of
+  dependencies into ~30 lines. Worth doing only if the hosted build actually
+  fails.
+
 ## 2026 observations
 
 The app scores forecasts against `data/processed/domain_mean_hourly_2026.csv`,
