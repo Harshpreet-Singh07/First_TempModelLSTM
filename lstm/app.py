@@ -18,6 +18,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -45,20 +46,20 @@ def get_forecaster():
 
 
 @st.cache_data(show_spinner=False)
-def get_forecast(day, _cache_key):
+def get_forecast(day, days, _cache_key):
     """_cache_key changes when the model or the 2026 file does."""
     hist, _ = get_history()
-    return forecast_day(get_forecaster(), hist, day)
+    return forecast_day(get_forecaster(), hist, day, days)
 
 
 # -------------------------------------------------------------------- charts
-def record_chart(hist, day):
+def record_chart(hist, day, n_days):
     fig, ax = plt.subplots(figsize=(12, 3.2))
     ax.plot(hist.index, hist.values, color=C_OBS, lw=0.4, alpha=0.25)
     ax.plot(hist.index, hist.rolling(24, center=True, min_periods=1).mean().values,
             color=C_OBS, lw=1.1, label="observed (24 h mean)")
-    ax.axvspan(pd.Timestamp(day), pd.Timestamp(day) + pd.Timedelta(days=1),
-               color=C_PRED, alpha=0.35, label="selected day")
+    ax.axvspan(pd.Timestamp(day), pd.Timestamp(day) + pd.Timedelta(days=n_days),
+               color=C_PRED, alpha=0.35, label="forecast window")
     ax.axhline(0, color="k", lw=0.6, ls="--", alpha=0.5)
     ax.set_ylabel("2 m temperature (deg C)")
     ax.set_xlim(hist.index[0], max(hist.index[-1], pd.Timestamp(day) + pd.Timedelta(days=1)))
@@ -69,21 +70,31 @@ def record_chart(hist, day):
     return fig
 
 
-def day_chart(df, day, mode):
+def day_chart(df, day, mode, n_days):
     fig, ax = plt.subplots(figsize=(12, 4.2))
+    marker = dict(marker="o", ms=3) if n_days == 1 else {}
     ax.plot(df.index, df["persistence"], color=C_PERS, lw=1.0, ls=":",
             label="persistence (last observed hour)")
     if df["actual"].notna().any():
-        ax.plot(df.index, df["actual"], color=C_OBS, lw=2.0, marker="o", ms=3,
-                label="ERA5 observed")
-    ax.plot(df.index, df["predicted"], color=C_PRED, lw=2.0, ls="--", marker="s",
-            ms=3, label="LSTM forecast")
-    ax.set_title(f"{pd.Timestamp(day):%A %d %B %Y} - 24 hourly steps issued at 00:00"
+        ax.plot(df.index, df["actual"], color=C_OBS, lw=2.0, label="ERA5 observed",
+                **marker)
+    ax.plot(df.index, df["predicted"], color=C_PRED, lw=2.0, ls="--",
+            label="LSTM forecast", **marker)
+
+    span = (f"{pd.Timestamp(day):%A %d %B %Y}" if n_days == 1 else
+            f"{pd.Timestamp(day):%d %b} - {df.index[-1]:%d %b %Y}")
+    ax.set_title(f"{span} - {len(df)} hourly steps issued at 00:00"
                  + ("" if mode == "warm" else "  (free-running)"), fontweight="bold")
     ax.set_ylabel("2 m temperature (deg C)")
-    ax.set_xlabel("Hour (UTC)")
-    ax.xaxis.set_major_locator(mdates.HourLocator(interval=2))
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+
+    if n_days == 1:
+        ax.set_xlabel("Hour (UTC)")
+        ax.xaxis.set_major_locator(mdates.HourLocator(interval=2))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+    else:
+        ax.set_xlabel("Date (UTC)")
+        ax.xaxis.set_major_locator(mdates.DayLocator())
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%d %b"))
     ax.legend(loc="best", fontsize=8)
     fig.tight_layout()
     return fig
@@ -92,7 +103,7 @@ def day_chart(df, day, mode):
 # ----------------------------------------------------------------------- app
 st.title("ERA5 2 m temperature - LSTM day forecast")
 st.caption(f"Domain mean {DOMAIN} · trained on 2025 hourly ERA5 · "
-           f"72 h in, 1 h ahead, rolled out 24 times")
+           f"72 h of history in, one hour predicted at a time, fed back in")
 
 try:
     hist, meta = get_history()
@@ -109,15 +120,31 @@ with st.sidebar:
     st.header("Forecast a day")
 
     last_obs = hist.index[-1]
-    # days past the last observation are allowed, but only the model's own
-    # output carries the forecast there - forecast_day() caps and flags it
+    # Any day with `lookback` observed hours in front of it can be forecast and
+    # scored - that is most of the record, not just 2026. Days past the last
+    # observation are allowed too, but only the model's own output carries the
+    # forecast there, so forecast_day() caps and flags those.
+    min_day = (hist.index[0] + pd.Timedelta(hours=fc.lookback)).date()
     max_day = (last_obs + pd.Timedelta(days=FREE_RUN_CAP_DAYS)).date()
     default_day = (last_obs - pd.Timedelta(days=1)).date() if meta["has_2026"] \
-        else dt.date(2026, 1, 1)
+        else dt.date(2025, 7, 1)
 
-    day = st.date_input("Day in 2026", value=default_day,
-                        min_value=dt.date(2026, 1, 1), max_value=max_day,
-                        format="YYYY-MM-DD")
+    if "day" not in st.session_state:
+        st.session_state.day = default_day
+
+    day = st.date_input("First day to forecast", key="day",
+                        min_value=min_day, max_value=max_day, format="YYYY-MM-DD")
+    n_days = st.slider("Forecast length (days)", 1, 7, 1,
+                       help="Each hour is predicted from the previous one, so "
+                            "error compounds the further out you go.")
+
+    if st.button("🎲 Random observed day", width="stretch"):
+        # any day that is fully observed, so the forecast can be scored
+        span = max((last_obs - pd.Timedelta(days=n_days)).date() - min_day,
+                   dt.timedelta(days=1))
+        st.session_state.day = min_day + dt.timedelta(
+            days=int(np.random.randint(span.days)))
+        st.rerun()
 
     st.divider()
     st.subheader("Data")
@@ -136,13 +163,13 @@ with st.sidebar:
 
 # ---- the record, with the chosen day marked
 st.subheader("Observed record")
-st.pyplot(record_chart(hist, day), width="stretch")
+st.pyplot(record_chart(hist, day, n_days), width="stretch")
 plt.close("all")
 
 # ---- the forecast for that day
 st.subheader("Forecast vs actual")
 with st.spinner("Rolling the model forward ..."):
-    res = get_forecast(pd.Timestamp(day), cache_key)
+    res = get_forecast(pd.Timestamp(day), n_days, cache_key)
 
 if "error" in res:
     st.error(res["error"])
@@ -152,15 +179,15 @@ df, mode = res["frame"], res["mode"]
 
 if mode == "warm":
     st.info(f"**Warm start.** Seeded with the {fc.lookback} observed hours ending "
-            f"{res['issued']:%d %b %H:%M}, then run 24 steps. This is a real "
-            f"24 h forecast.")
+            f"{res['issued']:%d %b %Y %H:%M}, then run {res['steps']} steps. "
+            f"This is a real {res['steps']} h forecast.")
 else:
     st.warning(f"**Free-running.** No observations near {day}, so the model was "
                f"seeded at {res['issued']:%d %b %Y %H:%M} and fed its own output "
                f"for {res['free_hours']:,} hours to reach this day. Errors compound "
                f"at every step - read this as model behaviour, not a forecast.")
 
-st.pyplot(day_chart(df, day, mode), width="stretch")
+st.pyplot(day_chart(df, day, mode, n_days), width="stretch")
 plt.close("all")
 
 if res["scores"]:
@@ -170,13 +197,17 @@ if res["scores"]:
               f"{p['mae'] - s['mae']:+.2f} vs persistence", delta_color="normal")
     c2.metric("RMSE", f"{s['rmse']:.2f} °C", f"{p['rmse'] - s['rmse']:+.2f} vs persistence")
     c3.metric("Bias", f"{s['bias']:+.2f} °C")
-    c4.metric("Warmest hour error",
-              f"{df['predicted'].max() - df['actual'].max():+.2f} °C")
+    c4.metric("Peak error",
+              f"{df['predicted'].max() - df['actual'].max():+.2f} °C",
+              help="Forecast warmest hour minus observed warmest hour")
+    scored = "" if res["n_scored"] == res["steps"] else \
+        f" Only {res['n_scored']} of {res['steps']} hours are observed, so the "\
+        f"scores cover that part."
     st.caption("Deltas are persistence minus LSTM: positive means the LSTM was "
-               "closer to the observations that day.")
-elif mode == "warm":
-    st.info("This day is not fully observed yet, so there is nothing to score "
-            "the forecast against.")
+               "closer to the observations." + scored)
+else:
+    st.info("None of these hours are observed, so there is nothing to score the "
+            "forecast against.")
 
 with st.expander("Hourly values"):
     st.dataframe(df.round(2), width="stretch")

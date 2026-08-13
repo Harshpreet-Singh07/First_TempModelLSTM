@@ -139,21 +139,22 @@ class Forecaster:
 
 
 # ------------------------------------------------------------------ forecast
-def forecast_day(fc, history, day):
-    """Predict the 24 hours of `day`, warm-started if the data allows it.
+def forecast_day(fc, history, day, days=1):
+    """Predict `days` x 24 hours from 00:00 on `day`, warm-started if possible.
 
     Returns a dict with an hourly DataFrame (predicted / actual / persistence),
     the mode used, and how far the forecast had to free-run.
     """
     day = pd.Timestamp(day).normalize()
-    target = pd.date_range(day, periods=HOURS_PER_DAY, freq="h")
+    steps = int(days) * HOURS_PER_DAY
+    target = pd.date_range(day, periods=steps, freq="h")
     seed_end = day - pd.Timedelta(hours=1)              # last hour before the day
     seed_start = seed_end - pd.Timedelta(hours=fc.lookback - 1)
 
     if seed_start >= history.index[0] and seed_end <= history.index[-1]:
-        # every seed hour is observed: a genuine 24 h forecast issued at 00:00
+        # every seed hour is observed: a genuine forecast issued at 00:00
         seed = history.loc[seed_start:seed_end].values
-        pred = fc.rollout(seed, HOURS_PER_DAY)
+        pred = fc.rollout(seed, steps)
         mode, free_hours, issued = "warm", 0, seed_end
 
     elif day > history.index[-1]:
@@ -170,27 +171,34 @@ def forecast_day(fc, history, day):
                     f"at {FREE_RUN_CAP_DAYS} days. Build the 2026 observations "
                     f"(python scripts/era5_2026.py) to forecast this day properly."),
             }
-        pred = fc.rollout(seed, free_hours + HOURS_PER_DAY)[-HOURS_PER_DAY:]
+        pred = fc.rollout(seed, free_hours + steps)[-steps:]
         mode, issued = "free", seed_end
 
     else:
-        return {"error": f"{day.date()} is before the available history starts."}
+        return {
+            "error": (
+                f"{day.date()} is too close to the start of the record - the "
+                f"forecast needs {fc.lookback} observed hours before it, and the "
+                f"data starts {history.index[0]:%d %b %Y}."),
+        }
 
     actual = history.reindex(target)
-    persistence = np.full(HOURS_PER_DAY, history.loc[issued])
+    persistence = np.full(steps, history.loc[issued])
 
     df = pd.DataFrame(
         {"predicted": pred, "persistence": persistence, "actual": actual.values},
         index=target)
     df.index.name = "valid_time"
 
+    scored = df.dropna(subset=["actual"])
     return {
         "frame": df,
         "mode": mode,
         "issued": issued,
         "free_hours": free_hours,
-        "has_actual": bool(actual.notna().all()),
-        "scores": _scores(df) if actual.notna().all() else None,
+        "steps": steps,
+        "n_scored": len(scored),          # partial days still score what exists
+        "scores": _scores(scored) if len(scored) else None,
     }
 
 
@@ -207,14 +215,15 @@ def _scores(df):
 
 
 if __name__ == "__main__":
-    day = sys.argv[1] if len(sys.argv) > 1 else "2026-01-01"
+    day = sys.argv[1] if len(sys.argv) > 1 else "2025-07-01"
+    n_days = int(sys.argv[2]) if len(sys.argv) > 2 else 1
     hist, meta = load_history()
     print(f"history: {hist.index[0]} .. {hist.index[-1]}  "
           f"({meta['n_2026']} hours of 2026)")
 
     fc = Forecaster()
     print(f"backend: {fc.backend}")
-    res = forecast_day(fc, hist, day)
+    res = forecast_day(fc, hist, day, n_days)
     if "error" in res:
         raise SystemExit(res["error"])
 

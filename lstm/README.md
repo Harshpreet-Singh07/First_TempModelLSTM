@@ -122,10 +122,20 @@ python lstm/forecast.py 2026-03-14      # 24 hourly steps, printed with actuals
 streamlit run lstm/app.py
 ```
 
-A sidebar date picker for any day in 2026, the full observed record with that
-day marked, and the day itself as **LSTM forecast vs ERA5 observed vs
-persistence**, with MAE / RMSE / bias underneath. The hourly table is
-downloadable as CSV.
+Pick any day the record covers - all of 2025, plus 2026 once that CSV exists -
+and a forecast length of 1 to 7 days. You get the full observed record with the
+forecast window marked, then the window itself as **LSTM forecast vs ERA5
+observed vs persistence**, with MAE / RMSE / bias underneath and the hourly
+table downloadable as CSV. There is no run button: changing the date or the
+length recomputes immediately.
+
+Forecasting 2025 days is the useful demo, because every hour has an observation
+to score against. A note on what the persistence baseline means here: it holds
+the 00:00 value flat for the whole window, so over 24 hours it is a much weaker
+opponent than the 1-hour-ahead persistence in the metrics table above. On
+1 July 2025 the LSTM scores MAE 0.63 deg C against persistence's 4.03, because
+the model reproduces the diurnal cycle and a flat line cannot. Both comparisons
+are fair; they just answer different questions.
 
 The forecast is issued at **00:00 of the chosen day** and rolled out 24 hours,
 one hour per step, each step fed the previous prediction. Two modes, and the app
