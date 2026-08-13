@@ -35,7 +35,10 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 ROOT = Path(__file__).resolve().parents[1]
 HERE = Path(__file__).resolve().parent
 MODEL_PATH = HERE / "models" / "lstm_t2m.keras"
+WEIGHTS_PATH = HERE / "models" / "lstm_t2m_weights.npz"
 SCALER_PATH = HERE / "models" / "scaler_t2m.json"
+
+sys.path.insert(0, str(HERE))            # lstm_numpy.py sits next to this file
 CSV_2025 = ROOT / "data" / "processed" / "domain_mean_hourly_2025.csv"
 CSV_2026 = ROOT / "data" / "processed" / "domain_mean_hourly_2026.csv"
 
@@ -80,17 +83,36 @@ def load_history():
 
 # --------------------------------------------------------------------- model
 class Forecaster:
-    """The saved Keras model plus the scaling it was trained with."""
+    """The trained network plus the scaling it was trained with.
+
+    Prefers the exported numpy weights and only falls back to Keras if they are
+    missing, so the deployed app never imports TensorFlow - Streamlit Community
+    Cloud runs Python 3.14, which has no TensorFlow wheels. The two backends are
+    verified equal to ~1e-7 by lstm/lstm_numpy.py.
+    """
 
     def __init__(self, model_path=MODEL_PATH, scaler_path=SCALER_PATH):
-        if not model_path.exists() or not scaler_path.exists():
+        if not scaler_path.exists():
             raise FileNotFoundError(
-                f"no trained model in {model_path.parent} - "
+                f"no trained model in {scaler_path.parent} - "
                 f"run: python lstm/train_lstm.py")
-
-        import keras                                  # slow import, do it late
-        self.model = keras.models.load_model(model_path)
         self.scaler = json.loads(scaler_path.read_text())
+
+        if WEIGHTS_PATH.exists():
+            from lstm_numpy import NumpyLSTM
+            net = NumpyLSTM(WEIGHTS_PATH)
+            self.backend = "numpy"
+            self._forward = lambda x: float(net(x)[0])
+        elif model_path.exists():
+            import keras                              # slow import, do it late
+            model = keras.models.load_model(model_path)
+            self.backend = "keras"
+            self._forward = lambda x: float(model(x, training=False)[0, 0])
+        else:
+            raise FileNotFoundError(
+                f"no weights in {model_path.parent} - "
+                f"run: python lstm/train_lstm.py && python lstm/lstm_numpy.py")
+
         self.mu = self.scaler["mean_c"]
         self.sd = self.scaler["std_c"]
         self.lookback = self.scaler["lookback"]
@@ -109,7 +131,7 @@ class Forecaster:
         z = ((np.asarray(seed_c, dtype="float64") - self.mu) / self.sd).astype("float32")
         out = np.empty(steps, dtype="float64")
         for i in range(steps):
-            step = float(self.model(z[None, :, None], training=False)[0, 0])
+            step = self._forward(z[None, :, None])
             nxt = step + z[-1] if self.delta else step
             out[i] = nxt
             z = np.append(z[1:], np.float32(nxt))
@@ -190,7 +212,9 @@ if __name__ == "__main__":
     print(f"history: {hist.index[0]} .. {hist.index[-1]}  "
           f"({meta['n_2026']} hours of 2026)")
 
-    res = forecast_day(Forecaster(), hist, day)
+    fc = Forecaster()
+    print(f"backend: {fc.backend}")
+    res = forecast_day(fc, hist, day)
     if "error" in res:
         raise SystemExit(res["error"])
 

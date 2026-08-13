@@ -7,11 +7,18 @@ cached CSV in `data/processed/`, so it needs no GRIB, `xarray` or `cfgrib`.
 ```
 lstm/
   train_lstm.py    build windows, train, evaluate, save everything
+  lstm_numpy.py    export the weights + run the forward pass without TensorFlow
   forecast.py      inference: seed a window, roll the model forward a day
   app.py           Streamlit UI - the record, a day forecast, the actuals
-  models/          lstm_t2m.keras + scaler_t2m.json   (written by the script)
+  models/          .keras model, .npz weights, scaler_t2m.json
   output/          loss curve, prediction figure, metrics.csv
 ```
+
+**TensorFlow trains the model; it does not run it.** `forecast.py` prefers the
+exported numpy weights and only falls back to Keras if the `.npz` is missing, so
+the app (and the deployment) never imports TensorFlow. After any retrain, run
+`python lstm/lstm_numpy.py` to re-export - it verifies the numpy forward pass
+against Keras and refuses to write a mismatch.
 
 ## Running
 
@@ -140,6 +147,11 @@ The repo is already prepared: `requirements.txt` at the root, the 440 MB GRIB
 gitignored, and the two files the app actually loads (the 2025 CSV and
 `lstm/models/`) committed - so a clone runs without any raw data.
 
+Note the Python version: Community Cloud currently builds on **3.14**, which has
+no TensorFlow wheels. That is why the app runs on exported numpy weights - with
+`tensorflow-cpu` in `requirements.txt` the build fails at dependency resolution,
+whatever Python version you pin.
+
 1. Create an empty repo at <https://github.com/new>. **Public** - the free tier
    cannot deploy from a private repo. Everything committed becomes visible:
    the ERA5 series, the figures, the trained model. ERA5 is Copernicus-licensed
@@ -165,12 +177,9 @@ Two things to expect:
 - **The 2026 data is not there until you push it.** `data/processed/` is
   committed, so once `era5_2026.py` has written the 2026 CSV, `git add` and push
   it or the hosted app will free-run exactly like a fresh clone.
-- **TensorFlow is heavy for a free tier.** If the app is killed while booting,
-  that is memory, not a bug in the code. The model is 16,961 parameters - a
-  single LSTM cell - so the fix is to drop the TensorFlow dependency at runtime
-  and do the forward pass in numpy from exported weights, which turns ~600 MB of
-  dependencies into ~30 lines. Worth doing only if the hosted build actually
-  fails.
+- **The weights must be committed, not just the .keras file.** The app loads
+  `lstm/models/lstm_t2m_weights.npz` (68 KB). If you retrain and forget to
+  re-export, the deployment silently keeps serving the old network.
 
 ## 2026 observations
 

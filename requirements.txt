@@ -1,14 +1,21 @@
 # Deployed app (lstm/app.py) - these are all it needs at runtime.
-# tensorflow-cpu, not tensorflow: the GPU build is ~3x larger and no hosted
-# free tier gives you a GPU anyway. Streamlit Community Cloud caps the whole
-# environment around 2.7 GB, which the full tensorflow wheel can blow past.
+#
+# No TensorFlow here on purpose. Streamlit Community Cloud builds on Python
+# 3.14, for which TensorFlow publishes no wheels, so the hosted app cannot
+# import it at all. The trained network is one LSTM cell plus a Dense head
+# (16,961 parameters), so lstm/lstm_numpy.py runs the forward pass from
+# exported weights and matches Keras to ~1e-7. TensorFlow is still required
+# to *train* - see the training block below.
 streamlit>=1.40
-tensorflow-cpu>=2.16
 pandas>=2.2
 numpy>=1.26
 matplotlib>=3.8
 
-# Data preparation only (scripts/era5_series.py, scripts/era5_2026.py).
-# Not needed to run the app - it reads the cached CSVs - and cfgrib pulls in
-# eccodes, which is awkward on hosted runners. Install locally if rebuilding:
+# Training only (lstm/train_lstm.py, lstm/lstm_numpy.py export step):
+#   pip install tensorflow
+#
+# Data preparation only (scripts/era5_series.py, scripts/era5_2026.py):
 #   pip install xarray cfgrib eccodes
+#
+# Neither is needed to run the app - it reads the cached CSVs and the exported
+# .npz weights, both of which are committed.
