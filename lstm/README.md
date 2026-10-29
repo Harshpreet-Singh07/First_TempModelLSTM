@@ -1,43 +1,99 @@
 # LSTM temperature model
 
 A small Keras/TensorFlow LSTM that forecasts the ERA5 domain-mean 2 m
-temperature (`t2m`) from its own recent history. Self-contained: it reads the
-cached CSV in `data/processed/`, so it needs no GRIB, `xarray` or `cfgrib`.
+temperature (`t2m`) an hour at a time. Self-contained: it reads the cached CSVs
+in `data/processed/`, so it needs no GRIB, `xarray` or `cfgrib`.
+
+Two versions ship side by side, and both apps let you pick:
+
+| | V2 - `t2m` | V3 - `v3` |
+|---|---|---|
+| data | 2025 only | 2006-2025 (20 years) |
+| inputs | temperature | temperature, its last-hour change, dewpoint, 10 m wind, wind-driven temperature advection, time of day/year |
+| predicts | change in temperature | change in every input variable (so it can run on its own output) |
+| split | first 70 / 15 / 15 % of 2025's hours | whole years 70 / 15 / 15: train 2006-2019, val 2020-2022, test 2023-2025 |
+| trained | locally | on Google Colab, `colab_train.ipynb` |
+
+The V2 code is kept on the `LSTM_Model_V2` branch. The V3 model files appear
+in `models/` once the Colab run's zip is unzipped into the repo; until then the
+apps run V2 only.
 
 ```
 lstm/
-  train_lstm.py    build windows, train, evaluate, save everything
+  features.py      the model inputs, built the same way for training and forecasting
+  train_lstm.py    build windows, train, evaluate, export, save everything
   lstm_numpy.py    export the weights + run the forward pass without TensorFlow
   forecast.py      inference: seed a window, roll the model forward a day
   app.py           Streamlit UI - the record, a day forecast, the actuals
-  models/          .keras model, .npz weights, scaler_t2m.json
-  output/          loss curve, prediction figure, metrics.csv
+  colab_train.ipynb  download 20 years + train V3 on Google Colab
+  models/          lstm_<name>.keras, lstm_<name>_weights.npz, scaler_<name>.json
+  output/          V2 figures + metrics.csv; output/<name>/ for every other model
 ```
 
 **TensorFlow trains the model; it does not run it.** `forecast.py` prefers the
 exported numpy weights and only falls back to Keras if the `.npz` is missing, so
-the app (and the deployment) never imports TensorFlow. After any retrain, run
-`python lstm/lstm_numpy.py` to re-export - it verifies the numpy forward pass
-against Keras and refuses to write a mismatch.
+the app (and the deployment) never imports TensorFlow. `train_lstm.py`
+re-exports at the end of every run and checks the numpy forward pass against
+Keras; `python lstm/lstm_numpy.py <name>` does the same by hand.
 
 ## Running
 
 ```bash
-python lstm/train_lstm.py                 # 72 h in -> 1 h ahead, ~3 min on CPU
-python lstm/train_lstm.py --horizon 24    # 24 h ahead
-python lstm/train_lstm.py --units 128 --epochs 100 --lookback 168
-python lstm/train_lstm.py --no-delta      # absolute-temperature target
+python lstm/train_lstm.py                          # V3 on every CSV present, name v3
+python lstm/train_lstm.py --years 2006-2025        # leave out a partial 2026
+python lstm/train_lstm.py --resume --epochs 30     # continue lstm_v3.keras
+python lstm/train_lstm.py --name uni --features t2m        # temperature only
+python lstm/train_lstm.py --name h24 --horizon 24          # 24 h ahead
 ```
 
-Flags: `--lookback --horizon --units --dropout --lr --epochs --batch --patience
---no-delta`. Every run overwrites `models/` and `output/` - the files currently
-there are from the `--horizon 24` run.
+Flags: `--name --features --years --val-start --test-start --resume --lookback
+--horizon --units --input-dropout --dropout --lr --epochs --batch --patience
+--no-delta`. A run only writes files under its own `--name`.
 
-Requires `tensorflow` (installed) plus the `numpy pandas matplotlib` the rest of
-the project already uses. If `data/processed/domain_mean_hourly_2025.csv` is
-missing, build it once with `python scripts/era5_series.py`.
+Requires `tensorflow` plus the `numpy pandas matplotlib` the rest of the project
+already uses. Training data is `data/processed/domain_mean_hourly_<year>.csv`;
+build the 20-year record with `python scripts/era5_years.py` (or on Colab). With
+only the 2025 CSV present, the split falls back to V2's 70 / 15 / 15 of the hours.
 
-## What it does
+## V3: more data, more inputs
+
+**20 years of data.** `scripts/era5_years.py` downloads 2006-2025 from the CDS,
+one request per year, and reduces each to a yearly CSV. The split moves to whole
+calendar years (70 / 15 / 15 of the years), so every split holds every season;
+V2's test set was November-December only. The split is saved in the scaler JSON,
+and `--resume` reuses it, so continuing training in a new Colab session cannot
+train on the test years. `metrics.csv` also scores V3 on V2's exact test window
+(7 Nov - 31 Dec 2025), so the two versions compare like for like.
+
+**Wind moves heat.** When the wind blows from warm air towards cold, the place
+downwind warms. A domain mean cannot see that by itself, so `t2m_adv`
+(`-(u dT/dx + v dT/dy)`, deg C per hour) is computed on the full grid when the
+GRIB is reduced, then averaged like every other variable. It goes in alongside
+`u10`, `v10` and dewpoint `d2m`.
+
+**Deltas in and out.** V2 already predicted the change from the last hour rather
+than the temperature itself: "no change" is the most common answer an hour
+ahead, and an output of zero means exactly that. V3 keeps that and also feeds
+the last hour's change in (`t2m_d1`). It predicts the change of *every* input
+variable, not just temperature, because a 24-168 h forecast runs on its own
+output and needs next hour's wind as much as next hour's temperature. Each
+output is scaled by the spread of its own changes so they weigh equally in the loss.
+
+**Input dropout.** In training, each input value - one feature at one hour - is
+zeroed independently with probability `--input-dropout` (0.1), so every feature
+is sometimes missing but no feature is ever removed. The alternatives that look
+similar, `SpatialDropout1D` and `LSTM(dropout=...)`, reuse one mask across the
+whole window and drop an entire feature for that sample. Separately, training
+now stops with an error if any year is missing an input column. Before, those
+hours would have quietly produced no windows, so the model would train as if
+that feature, or that year, had never existed.
+
+**Colab.** `colab_train.ipynb` clones the repo, keeps data and checkpoints in
+Google Drive, downloads and reduces the years (skipping finished ones), trains
+with a checkpoint every improved epoch, and downloads a zip of the model and data
+to unzip into this folder.
+
+## What V2 does
 
 | | |
 |---|---|

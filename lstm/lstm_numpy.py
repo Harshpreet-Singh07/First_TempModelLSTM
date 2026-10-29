@@ -1,8 +1,9 @@
 """
 The trained LSTM as ~40 lines of numpy, so the deployed app needs no TensorFlow.
 
-The network is one LSTM cell (64 units) plus a Dense(1) head - 16,961
-parameters. A forward pass is four matrix multiplies and a handful of
+The network is one LSTM cell (64 units) plus a Dense head - 16,961 parameters
+for the V2 temperature-only model, a few thousand more for V3's extra inputs
+and outputs. Input dropout is training-only, so it has no weights. A forward pass is four matrix multiplies and a handful of
 elementwise ops per timestep, which numpy does perfectly well. Training still
 uses Keras (train_lstm.py); this is inference only.
 
@@ -10,8 +11,9 @@ Why it exists: Streamlit Community Cloud builds on Python 3.14, and TensorFlow
 publishes no wheels for it - so the hosted app cannot import TensorFlow at all.
 Exported weights sidestep that, and drop the deploy from ~600 MB to numpy.
 
-    python lstm/lstm_numpy.py        # export weights from the .keras model,
+    python lstm/lstm_numpy.py [name] # export weights from lstm_<name>.keras,
                                      # then verify numpy == Keras
+                                     # (train_lstm.py already does this)
 
 Weight layout, as Keras stores it:
     kernel            (n_features, 4 * units)     input -> gates
@@ -43,7 +45,7 @@ def _sigmoid(x):
 
 
 class NumpyLSTM:
-    """LSTM(units) -> Dense(1), forward pass only. Dropout is a no-op here."""
+    """LSTM(units) -> Dense(outputs), forward pass only. Dropout is a no-op here."""
 
     def __init__(self, path=WEIGHTS):
         if not path.exists():
@@ -53,12 +55,12 @@ class NumpyLSTM:
         self.W = w["kernel"].astype("float64")            # (features, 4u)
         self.U = w["recurrent_kernel"].astype("float64")  # (units,    4u)
         self.b = w["bias"].astype("float64")              # (4u,)
-        self.Wd = w["dense_kernel"].astype("float64")     # (units, 1)
-        self.bd = w["dense_bias"].astype("float64")       # (1,)
+        self.Wd = w["dense_kernel"].astype("float64")     # (units, outputs)
+        self.bd = w["dense_bias"].astype("float64")       # (outputs,)
         self.units = self.U.shape[0]
 
     def __call__(self, x):
-        """x: (batch, timesteps, features) -> (batch,) predictions."""
+        """x: (batch, timesteps, features) -> (batch, outputs) predictions."""
         x = np.asarray(x, dtype="float64")
         if x.ndim == 2:
             x = x[None, ...]
@@ -76,7 +78,7 @@ class NumpyLSTM:
             c = f * c + i * g
             h = o * np.tanh(c)
 
-        return (h @ self.Wd + self.bd).ravel()
+        return h @ self.Wd + self.bd
 
 
 # ------------------------------------------------------------------- export
@@ -114,11 +116,12 @@ def verify(model, name="t2m", tol=1e-5, n=64):
     """numpy and Keras must agree on random windows, or the export is wrong."""
     _, weights, scaler_path = paths(name)
     scaler = json.loads(scaler_path.read_text())
+    net = NumpyLSTM(weights)
     rng = np.random.default_rng(0)
-    x = rng.normal(size=(n, scaler["lookback"], 1)).astype("float32")
+    x = rng.normal(size=(n, scaler["lookback"], net.W.shape[0])).astype("float32")
 
-    ours = NumpyLSTM(weights)(x)
-    theirs = model.predict(x, verbose=0).ravel()
+    ours = net(x)
+    theirs = model.predict(x, verbose=0)
     diff = float(np.max(np.abs(ours - theirs)))
 
     print(f"max |numpy - keras| over {n} random windows: {diff:.2e}")

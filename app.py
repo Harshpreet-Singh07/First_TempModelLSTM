@@ -25,12 +25,13 @@ C_OBS, C_PRED, C_PERS = "#d1495b", "#2a6f97", "#8d99ae"   # same palette as lstm
 
 hist, meta = load_history()
 
-# every model in lstm/models/ (scaler_<name>.json + weights); "t2m" is the default.
+# every model in lstm/models/ (scaler_<name>.json + weights): t2m is V2, v3 the
+# multi-variable model once it has been trained, and the default when present.
 # Models load on first use and are kept, so switching is instant after that.
 MODELS = list_models()
 if not MODELS:
     raise SystemExit("no models in lstm/models/ - run: python lstm/train_lstm.py")
-DEFAULT_MODEL = "t2m" if "t2m" in MODELS else MODELS[0]
+DEFAULT_MODEL = next((m for m in ("v3", "t2m") if m in MODELS), MODELS[0])
 _loaded = {}
 
 
@@ -87,7 +88,7 @@ def test_metrics(name):
         .rename_axis("Statistic").reset_index()
 
 
-MIN_DAY = (hist.index[0] + pd.Timedelta(hours=get_model(DEFAULT_MODEL).lookback)).date()
+MIN_DAY = (hist.index[0] + pd.Timedelta(hours=get_model(DEFAULT_MODEL).seed_hours)).date()
 LAST_OBS = hist.index[-1]
 MAX_DAY = (LAST_OBS + pd.Timedelta(days=FREE_RUN_CAP_DAYS)).date()
 DEFAULT_DAY = "2025-07-01"
@@ -134,13 +135,14 @@ def run(day_text, n_days, model_name=DEFAULT_MODEL):
         raise gr.Error(res["error"])
 
     df, mode = res["frame"], res["mode"]
+    status = f"Model '{fc.name}': {fc.describe()}.\n"
     if mode == "warm":
-        status = (f"Model '{fc.name}'. Warm start: seeded with the {fc.lookback} observed hours ending "
-                  f"{res['issued']:%d %b %Y %H:%M}, then run {res['steps']} steps.")
+        status += (f"Warm start: seeded with the {fc.lookback} observed hours ending "
+                   f"{res['issued']:%d %b %Y %H:%M}, then run {res['steps']} steps.")
     else:
-        status = (f"Model '{fc.name}'. Free-running: no observations near {day:%Y-%m-%d}, so the model "
-                  f"fed on its own output for {res['free_hours']:,} h. Errors compound "
-                  f"- read this as model behaviour, not a forecast.")
+        status += (f"Free-running: no inputs for this model near {day:%Y-%m-%d}, so it "
+                   f"fed on its own output for {res['free_hours']:,} h. Errors compound "
+                   f"- read this as model behaviour, not a forecast.")
 
     heading = (f"### Scoring: model **{fc.name}**, {day:%d %b %Y}, "
                f"{n_days} day{'s' if n_days > 1 else ''} "
@@ -163,8 +165,9 @@ def run(day_text, n_days, model_name=DEFAULT_MODEL):
 with gr.Blocks(title="ERA5 t2m LSTM") as demo:
     gr.Markdown(
         f"# ERA5 2 m temperature - LSTM day forecast\n"
-        f"Domain mean {DOMAIN} · trained on 2025 hourly ERA5 · 72 h of history in, "
-        f"one hour predicted at a time and fed back in.\n\n"
+        f"Domain mean {DOMAIN} · hourly ERA5 · the last few days in, one hour "
+        f"predicted at a time and fed back in. **t2m** (V2) reads temperature only; "
+        f"**v3** also reads humidity, wind and the heat the wind carries in.\n\n"
         f"Observations run to **{LAST_OBS:%Y-%m-%d %H:%M}**. Forecastable days: "
         f"{MIN_DAY} to {MAX_DAY} (days past the observations are free-running).")
     with gr.Row():
@@ -176,7 +179,7 @@ with gr.Blocks(title="ERA5 t2m LSTM") as demo:
     with gr.Tabs():
         with gr.Tab("Forecast"):
             plot_out = gr.Plot(label="Forecast vs actual")
-            status_out = gr.Textbox(label="Mode", lines=3)
+            status_out = gr.Textbox(label="Mode", lines=4)
             with gr.Accordion("Hourly values", open=False):
                 table_out = gr.Dataframe()
 
@@ -185,7 +188,7 @@ with gr.Blocks(title="ERA5 t2m LSTM") as demo:
             stats_out = gr.Dataframe(label="Accuracy of this forecast vs persistence "
                                            "(last observed hour held flat)")
             test_out = gr.Dataframe(
-                label="Model test-set accuracy (from training: 1 h ahead, last 15% of 2025)")
+                label="Model test-set accuracy (from training: 1 h ahead, held-out test period)")
             gr.Markdown(
                 "The two tables answer different questions. The first scores the "
                 "whole rollout you picked, where persistence cannot follow the "
