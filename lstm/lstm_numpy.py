@@ -80,10 +80,17 @@ class NumpyLSTM:
 
 
 # ------------------------------------------------------------------- export
-def export(model_path=MODEL_PATH, out=WEIGHTS):
+def paths(name="t2m"):
+    """(keras, weights npz, scaler json) for a model name."""
+    m = HERE / "models"
+    return m / f"lstm_{name}.keras", m / f"lstm_{name}_weights.npz", m / f"scaler_{name}.json"
+
+
+def export(name="t2m"):
     """Pull the weights out of the .keras file into a small npz."""
     import keras                                   # only needed to export
 
+    model_path, out, _ = paths(name)
     model = keras.models.load_model(model_path)
     lstm = next(l for l in model.layers if l.__class__.__name__ == "LSTM")
     dense = next(l for l in model.layers if l.__class__.__name__ == "Dense")
@@ -103,13 +110,14 @@ def export(model_path=MODEL_PATH, out=WEIGHTS):
     return model
 
 
-def verify(model, tol=1e-5, n=64):
+def verify(model, name="t2m", tol=1e-5, n=64):
     """numpy and Keras must agree on random windows, or the export is wrong."""
-    scaler = json.loads((HERE / "models" / "scaler_t2m.json").read_text())
+    _, weights, scaler_path = paths(name)
+    scaler = json.loads(scaler_path.read_text())
     rng = np.random.default_rng(0)
     x = rng.normal(size=(n, scaler["lookback"], 1)).astype("float32")
 
-    ours = NumpyLSTM()(x)
+    ours = NumpyLSTM(weights)(x)
     theirs = model.predict(x, verbose=0).ravel()
     diff = float(np.max(np.abs(ours - theirs)))
 
@@ -120,4 +128,6 @@ def verify(model, tol=1e-5, n=64):
 
 
 if __name__ == "__main__":
-    verify(export())
+    import sys
+    name = sys.argv[1] if len(sys.argv) > 1 else "t2m"      # python lstm/lstm_numpy.py [name]
+    verify(export(name), name)

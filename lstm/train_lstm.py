@@ -28,6 +28,7 @@ Usage:
   python lstm/train_lstm.py                      # 72 h in -> 1 h ahead
   python lstm/train_lstm.py --horizon 24         # 24 h ahead (much harder)
   python lstm/train_lstm.py --units 128 --epochs 100
+  python lstm/train_lstm.py --name big128 --units 128   # keeps the current model
   python lstm/train_lstm.py --no-delta            # absolute-temperature target
 """
 
@@ -233,22 +234,25 @@ def main(args):
     m, mb = scores(true_c, pred_c), scores(true_c, base_c)
     skill = 1 - m["mae"] / mb["mae"]
 
+    # the default name keeps the original file names; any other name gets its
+    # own set of files so earlier models are never overwritten
+    out_dir = OUT if args.name == "t2m" else OUT / args.name
     MODELS.mkdir(parents=True, exist_ok=True)
-    OUT.mkdir(parents=True, exist_ok=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    model.save(MODELS / "lstm_t2m.keras")
-    (MODELS / "scaler_t2m.json").write_text(json.dumps({
+    model.save(MODELS / f"lstm_{args.name}.keras")
+    (MODELS / f"scaler_{args.name}.json").write_text(json.dumps({
         "mean_c": mu, "std_c": sd, "lookback": args.lookback,
         "horizon": args.horizon, "target": TARGET, "delta": bool(args.delta),
         "train_end": str(tr.index[-1]), "test_start": str(te.index[0]),
     }, indent=2))
 
     pd.DataFrame([dict(model="lstm", **m), dict(model="persistence", **mb)]).to_csv(
-        OUT / "metrics.csv", index=False, float_format="%.4f")
+        out_dir / "metrics.csv", index=False, float_format="%.4f")
 
-    plot_history(hist.history, OUT / "01_loss_curve.png")
+    plot_history(hist.history, out_dir / "01_loss_curve.png")
     plot_predictions(tte, true_c, pred_c, base_c, m, mb, args,
-                     OUT / "02_test_predictions.png")
+                     out_dir / "02_test_predictions.png")
 
     print(f"\ntest period: {tte[0]} .. {tte[-1]}  ({len(tte)} hours)")
     print(f"{'':12s} {'MAE':>8s} {'RMSE':>8s} {'bias':>8s} {'R2':>8s}")
@@ -256,11 +260,15 @@ def main(args):
         print(f"{name:12s} {d['mae']:8.3f} {d['rmse']:8.3f} "
               f"{d['bias']:8.3f} {d['r2']:8.3f}")
     print(f"\nskill vs persistence (MAE): {skill:+.1%}")
-    print(f"saved -> {MODELS.resolve()}\n         {OUT.resolve()}")
+    print(f"saved model '{args.name}' -> {MODELS.resolve()}\n         {out_dir.resolve()}")
+    print(f"next: python lstm/lstm_numpy.py {args.name}")
 
 
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__.split("\n")[1])
+    p.add_argument("--name", default="t2m",
+                   help="model name; files are lstm_<name>.keras etc. (default t2m, "
+                        "which overwrites the current model - use a new name to keep it)")
     p.add_argument("--lookback", type=int, default=72, help="input hours (default 72)")
     p.add_argument("--horizon", type=int, default=1, help="hours ahead (default 1)")
     p.add_argument("--units", type=int, default=64, help="LSTM units (default 64)")

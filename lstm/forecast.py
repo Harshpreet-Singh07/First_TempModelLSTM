@@ -34,11 +34,23 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 
 ROOT = Path(__file__).resolve().parents[1]
 HERE = Path(__file__).resolve().parent
-MODEL_PATH = HERE / "models" / "lstm_t2m.keras"
-WEIGHTS_PATH = HERE / "models" / "lstm_t2m_weights.npz"
-SCALER_PATH = HERE / "models" / "scaler_t2m.json"
+MODELS_DIR = HERE / "models"
 
 sys.path.insert(0, str(HERE))            # lstm_numpy.py sits next to this file
+from lstm_numpy import paths as model_files   # noqa: E402  (keras, npz, scaler json)
+
+
+def list_models():
+    """Names of every model that has a scaler plus weights (npz or keras)."""
+    names = []
+    for scaler in sorted(MODELS_DIR.glob("scaler_*.json")):
+        name = scaler.stem.removeprefix("scaler_")
+        keras_p, npz_p, _ = model_files(name)
+        if npz_p.exists() or keras_p.exists():
+            names.append(name)
+    return names
+
+
 CSV_2025 = ROOT / "data" / "processed" / "domain_mean_hourly_2025.csv"
 CSV_2026 = ROOT / "data" / "processed" / "domain_mean_hourly_2026.csv"
 
@@ -91,16 +103,20 @@ class Forecaster:
     verified equal to ~1e-7 by lstm/lstm_numpy.py.
     """
 
-    def __init__(self, model_path=MODEL_PATH, scaler_path=SCALER_PATH):
+    def __init__(self, name="t2m"):
+        """`name` picks the model files: lstm_<name>.keras, scaler_<name>.json,
+        lstm_<name>_weights.npz in lstm/models/ (see train_lstm.py --name)."""
+        self.name = name
+        model_path, weights_path, scaler_path = model_files(name)
         if not scaler_path.exists():
             raise FileNotFoundError(
-                f"no trained model in {scaler_path.parent} - "
-                f"run: python lstm/train_lstm.py")
+                f"no trained model '{name}' in {scaler_path.parent} - "
+                f"run: python lstm/train_lstm.py --name {name}")
         self.scaler = json.loads(scaler_path.read_text())
 
-        if WEIGHTS_PATH.exists():
+        if weights_path.exists():
             from lstm_numpy import NumpyLSTM
-            net = NumpyLSTM(WEIGHTS_PATH)
+            net = NumpyLSTM(weights_path)
             self.backend = "numpy"
             self._forward = lambda x: float(net(x)[0])
         elif model_path.exists():
@@ -111,7 +127,8 @@ class Forecaster:
         else:
             raise FileNotFoundError(
                 f"no weights in {model_path.parent} - "
-                f"run: python lstm/train_lstm.py && python lstm/lstm_numpy.py")
+                f"run: python lstm/train_lstm.py --name {name} && "
+                f"python lstm/lstm_numpy.py {name}")
 
         self.mu = self.scaler["mean_c"]
         self.sd = self.scaler["std_c"]
@@ -203,13 +220,21 @@ def forecast_day(fc, history, day, days=1):
 
 
 def _scores(df):
+    actual = df["actual"].values
+    sst = float(np.sum((actual - actual.mean()) ** 2))
     out = {}
     for col in ("predicted", "persistence"):
-        err = df[col].values - df["actual"].values
+        err = df[col].values - actual
         out[col] = {
             "mae": float(np.mean(np.abs(err))),
             "rmse": float(np.sqrt(np.mean(err ** 2))),
             "bias": float(np.mean(err)),
+            "max_err": float(np.max(np.abs(err))),
+            # share of variance explained; undefined for a flat observed series
+            "r2": float(1 - np.sum(err ** 2) / sst) if sst > 0 else float("nan"),
+            # "accuracy" for a temperature forecast: hours within a tolerance
+            "within_1": float(np.mean(np.abs(err) <= 1.0)),
+            "within_2": float(np.mean(np.abs(err) <= 2.0)),
         }
     return out
 
@@ -221,8 +246,8 @@ if __name__ == "__main__":
     print(f"history: {hist.index[0]} .. {hist.index[-1]}  "
           f"({meta['n_2026']} hours of 2026)")
 
-    fc = Forecaster()
-    print(f"backend: {fc.backend}")
+    fc = Forecaster(sys.argv[3] if len(sys.argv) > 3 else "t2m")
+    print(f"model: {fc.name}  backend: {fc.backend}")
     res = forecast_day(fc, hist, day, n_days)
     if "error" in res:
         raise SystemExit(res["error"])

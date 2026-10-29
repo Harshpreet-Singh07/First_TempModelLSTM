@@ -1,0 +1,7 @@
+# Hugging Face Space dependencies. In the Space repo, rename this file to
+# requirements.txt (the root requirements.txt is for the Streamlit app).
+# No TensorFlow: lstm/forecast.py runs the exported numpy weights.
+gradio>=4.44
+pandas>=2.2
+numpy>=1.26
+plotly>=5.20
