@@ -14,8 +14,8 @@ matplotlib>=3.8
 # Training only (lstm/train_lstm.py, lstm/lstm_numpy.py export step):
 #   pip install tensorflow
 #
-# Data preparation only (scripts/era5_series.py, scripts/era5_2026.py):
-#   pip install xarray cfgrib eccodes
+# Data preparation only (scripts/era5_series.py, era5_years.py, era5_2026.py):
+#   pip install xarray cfgrib eccodes cdsapi   (cdsapi: era5_years.py downloads)
 #
 # Neither is needed to run the app - it reads the cached CSVs and the exported
 # .npz weights, both of which are committed.
